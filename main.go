@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	_ "github.com/lib/pq"
 )
@@ -100,9 +101,10 @@ func main() {
 	})
 
 	// Railway akan memberikan PORT via env
-	port := "8080"
-	if p := getenv("PORT"); p != "" {
-		port = p
+	// Gunakan os.Getenv bawaan Go
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
 	fmt.Println("Running on port:", port)
