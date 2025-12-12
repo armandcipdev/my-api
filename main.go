@@ -47,7 +47,7 @@ func main() {
 			var tanggal_lahir string // bisa pakai time.Time jika mau
 			err := db.QueryRow(
 				`SELECT id, kode, nama, tanggal_lahir, lokasi, email
-				 FROM users WHERE id=$1`, userID).Scan(&id, &kode, &nama, &tanggal_lahir, &lokasi, &email)
+				 FROM user_pengguna WHERE id=$1`, userID).Scan(&id, &kode, &nama, &tanggal_lahir, &lokasi, &email)
 			if err != nil {
 				if err == sql.ErrNoRows {
 					http.Error(w, "User not found", 404)
