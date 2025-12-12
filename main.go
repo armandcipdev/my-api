@@ -16,8 +16,8 @@ func main() {
 	// if dbURL == "" {
 	// 	log.Fatal("DATABASE_URL not set")
 	// }
-	dbURL := "postgresql://postgres:password@postgres.railway.internal:5432/railway"
-
+	// dbURL := "postgresql://postgres:password@postgres.railway.internal:5432/railway"
+	dbURL := "postgresql://postgres:tiJDUvMQYrRYHkgCYKoMYrFWbAGNMjRi@interchange.proxy.rlwy.net:11133/railway"
 	// Connect ke DB
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -76,3 +76,11 @@ func main() {
 	fmt.Println("Running on port:", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
+
+// Cara pakai:
+
+// / → tampil: Welcome!
+
+// /?time=true → tampil current time dari DB
+
+// /?user_id=1 → tampil data user dengan id=1
