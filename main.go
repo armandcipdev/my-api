@@ -12,12 +12,12 @@ import (
 
 func main() {
 	// Ambil DATABASE_URL dari Railway
-	// dbURL := os.Getenv("DATABASE_URL")
-	// if dbURL == "" {
-	// 	log.Fatal("DATABASE_URL not set")
-	// }
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL not set")
+	}
 	// dbURL := "postgresql://postgres:password@postgres.railway.internal:5432/railway"
-	dbURL := "postgresql://postgres:tiJDUvMQYrRYHkgCYKoMYrFWbAGNMjRi@interchange.proxy.rlwy.net:11133/railway"
+	//dbURL := "postgresql://postgres:tiJDUvMQYrRYHkgCYKoMYrFWbAGNMjRi@interchange.proxy.rlwy.net:11133/railway"
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
