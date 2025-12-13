@@ -12,6 +12,8 @@ import (
 
 func main() {
 	// Ambil DATABASE_URL dari Railway
+	log.Println("DATABASE_URL =", os.Getenv("DATABASE_URL"))
+
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Fatal("DATABASE_URL not set")
