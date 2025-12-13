@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -21,10 +22,36 @@ func main() {
 	// dbURL := "postgresql://postgres:password@postgres.railway.internal:5432/railway"
 	//dbURL := "postgresql://postgres:tiJDUvMQYrRYHkgCYKoMYrFWbAGNMjRi@interchange.proxy.rlwy.net:11133/railway"
 
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Fatal("DB connection error: ", err)
+	// Retry membuka koneksi & ping DB sampai berhasil atau maksimal percobaan
+	var db *sql.DB
+	var err error
+	maxRetries := 5
+	for i := 1; i <= maxRetries; i++ {
+		db, err = sql.Open("postgres", dbURL)
+		if err != nil {
+			log.Printf("Attempt %d: failed to open DB: %v", i, err)
+		} else {
+			err = db.Ping()
+			if err == nil {
+				log.Printf("Connected to DB successfully on attempt %d", i)
+				break
+			}
+			log.Printf("Attempt %d: DB ping failed: %v", i, err)
+			db.Close()
+		}
+		if i < maxRetries {
+			log.Printf("Retrying in 2 seconds...")
+			time.Sleep(2 * time.Second)
+		}
 	}
+	if err != nil {
+		log.Fatalf("Failed to connect to DB after %d attempts: %v", maxRetries, err)
+	}
+
+	// db, err := sql.Open("postgres", dbURL)
+	// if err != nil {
+	// 	log.Fatal("DB connection error: ", err)
+	// }
 	defer db.Close()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
