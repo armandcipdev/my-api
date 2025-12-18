@@ -62,8 +62,8 @@ func main() {
 	}
 	defer db.Close()
 
-	http.HandleFunc("/users", usersHandler)
-	http.HandleFunc("/users/", userHandler)
+	http.HandleFunc("/users", handleUsers)
+	http.HandleFunc("/users/", handleUser)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -78,7 +78,7 @@ func main() {
    HANDLERS
 ========================= */
 
-func usersHandler(w http.ResponseWriter, r *http.Request) {
+func handleUsers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	switch r.Method {
@@ -109,8 +109,13 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		response := map[string]interface{}{
+			"message": "User created successfully",
+			"user":    u,
+		}
+
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(u)
+		json.NewEncoder(w).Encode(response)
 
 	// ================= READ ALL =================
 	case http.MethodGet:
@@ -189,7 +194,7 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func userHandler(w http.ResponseWriter, r *http.Request) {
+func handleUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	path := strings.TrimPrefix(r.URL.Path, "/users/")
@@ -208,7 +213,7 @@ func userHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, err := db.Exec(
+		result, err := db.Exec(
 			`UPDATE user_pengguna
 			 SET deleted_at = NULL
 			 WHERE id=$1`,
@@ -219,8 +224,14 @@ func userHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+
 		json.NewEncoder(w).Encode(map[string]string{
-			"message": "user restored",
+			"message": "User restored successfully",
 		})
 		return
 	}
@@ -290,7 +301,11 @@ func userHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		u.ID = id
-		json.NewEncoder(w).Encode(u)
+		response := map[string]interface{}{
+			"message": "User updated successfully",
+			"user":    u,
+		}
+		json.NewEncoder(w).Encode(response)
 
 	// ================= SOFT DELETE =================
 	case http.MethodDelete:
@@ -311,7 +326,9 @@ func userHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		w.WriteHeader(http.StatusNoContent)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "User deleted successfully",
+		})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
