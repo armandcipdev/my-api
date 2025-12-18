@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -15,39 +14,79 @@ import (
 	_ "github.com/lib/pq"
 )
 
-/* =========================
-   GLOBAL DB
-========================= */
-
 var db *sql.DB
 
-// CONFIG MASTER TABLE
+// ---------------- MASTER CONFIG ----------------
+
 type MasterConfig struct {
 	TableName string
 	Fields    []string
 }
 
-// Daftar master table yang terdaftar
+// Hooks untuk tiap master
+type MasterHook struct {
+	BeforeCreate func(data map[string]interface{}) error
+	BeforeUpdate func(data map[string]interface{}) error
+	BeforeDelete func(id string) error
+}
+
+// Master tables
 var masterTables = map[string]MasterConfig{
 	"user": {
 		TableName: "user_pengguna",
-		Fields:    []string{"id", "kode", "nama", "tanggal_lahir", "lokasi", "email", "created_at", "updated_at"},
-	},
-	"produk": {
-		TableName: "produk",
-		Fields:    []string{"id", "kode", "nama", "harga", "stok", "created_at", "updated_at"},
+		Fields:    []string{"id", "kode", "nama", "tanggal_lahir", "lokasi", "email", "created_at", "updated_at", "deleted_at"},
 	},
 	"customer": {
 		TableName: "customer",
-		Fields:    []string{"id", "kode", "nama", "email", "telepon", "created_at", "updated_at"},
+		Fields:    []string{"id", "kode", "nama", "email", "telepon", "created_at", "updated_at", "deleted_at"},
+	},
+	"produk": {
+		TableName: "produk",
+		Fields:    []string{"id", "kode", "nama", "harga", "stok", "created_at", "updated_at", "deleted_at"},
 	},
 }
 
-// Tambahkan master lain disini
+// Hooks per master
+var masterHooks = map[string]MasterHook{
+	"user": {
+		BeforeCreate: func(data map[string]interface{}) error {
+			if data["nama"] == "" {
+				return fmt.Errorf("nama wajib diisi")
+			}
+			if data["email"] == "" {
+				return fmt.Errorf("email wajib diisi")
+			}
+			return nil
+		},
+		BeforeDelete: func(id string) error {
+			if id == "1" {
+				return fmt.Errorf("user admin tidak bisa dihapus")
+			}
+			return nil
+		},
+	},
+	"customer": {
+		BeforeCreate: func(data map[string]interface{}) error {
+			if data["nama"] == "" {
+				return fmt.Errorf("nama wajib diisi")
+			}
+			return nil
+		},
+	},
+	"produk": {
+		BeforeCreate: func(data map[string]interface{}) error {
+			if data["nama"] == "" {
+				return fmt.Errorf("nama produk wajib diisi")
+			}
+			if data["harga"] == nil {
+				return fmt.Errorf("harga wajib diisi")
+			}
+			return nil
+		},
+	},
+}
 
-/* =========================
-   MAIN
-========================= */
+// ---------------- MAIN ----------------
 
 func main() {
 	dbURL := os.Getenv("DATABASE_URL")
@@ -56,182 +95,175 @@ func main() {
 	}
 
 	var err error
-	for i := 1; i <= 5; i++ {
-		db, err = sql.Open("postgres", dbURL)
-		if err == nil && db.Ping() == nil {
-			log.Println("Connected to database")
-			break
-		}
-		log.Println("Retry DB connection in 2s...")
-		time.Sleep(2 * time.Second)
-	}
+	db, err = sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("DB connection error:", err)
 	}
 	defer db.Close()
 
-	http.HandleFunc("/api/", genericHandler)
+	err = db.Ping()
+	if err != nil {
+		log.Fatal("DB ping error:", err)
+	}
+
+	http.HandleFunc("/api/", masterHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	log.Println("Server running on port", port)
+	fmt.Println("Running on port:", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-/* =========================
-   GENERIC HANDLER
-========================= */
+// ---------------- HANDLER ----------------
 
-func genericHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// Parse path: /api/{master}/{id}/{action}
-	path := strings.TrimPrefix(r.URL.Path, "/api/")
-	parts := strings.Split(path, "/")
-	if len(parts) < 1 || parts[0] == "" {
-		http.Error(w, "Master table not specified", http.StatusBadRequest)
+func masterHandler(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "api" {
+		http.NotFound(w, r)
 		return
 	}
 
-	masterKey := parts[0]
+	masterKey := parts[1]
 	config, ok := masterTables[masterKey]
 	if !ok {
-		http.Error(w, "Master table not found", http.StatusNotFound)
+		http.Error(w, "Master table not found", 404)
 		return
 	}
 
-	// ID parsing jika ada
-	id := 0
-	if len(parts) > 1 && parts[1] != "" {
-		var err error
-		id, err = strconv.Atoi(parts[1])
-		if err != nil {
-			http.Error(w, "Invalid ID", http.StatusBadRequest)
-			return
-		}
-	}
-
-	action := ""
-	if len(parts) > 2 {
-		action = parts[2]
+	id := ""
+	if len(parts) >= 3 {
+		id = parts[2]
 	}
 
 	switch r.Method {
-	case http.MethodGet:
-		if id > 0 {
-			getByID(w, config, id)
-		} else {
-			getList(w, r, config)
+	case "GET":
+		handleGet(w, r, masterKey, config, id)
+	case "POST":
+		handleCreate(w, r, masterKey, config)
+	case "PUT":
+		if id == "" {
+			http.Error(w, "ID required", 400)
+			return
 		}
-	case http.MethodPost:
-		createItem(w, r, config)
-	case http.MethodPut:
-		if action == "restore" && id > 0 {
-			restoreItem(w, config, id)
-		} else if id > 0 {
-			updateItem(w, r, config, id)
-		} else {
-			http.Error(w, "Invalid request", http.StatusBadRequest)
+		handleUpdate(w, r, masterKey, config, id)
+	case "DELETE":
+		if id == "" {
+			http.Error(w, "ID required", 400)
+			return
 		}
-	case http.MethodDelete:
-		if id > 0 {
-			deleteItem(w, config, id)
-		} else {
-			http.Error(w, "ID required", http.StatusBadRequest)
-		}
+		handleDelete(w, r, masterKey, config, id)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Method not allowed", 405)
 	}
 }
 
-/* =========================
-   GENERIC CRUD FUNCTIONS
-========================= */
+// ---------------- CRUD HANDLERS ----------------
 
-func getByID(w http.ResponseWriter, config MasterConfig, id int) {
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE id=$1 AND deleted_at IS NULL", strings.Join(config.Fields, ","), config.TableName)
-	row := db.QueryRow(query, id)
-
-	values := make([]interface{}, len(config.Fields))
-	valuePtrs := make([]interface{}, len(config.Fields))
-	for i := range config.Fields {
-		valuePtrs[i] = &values[i]
-	}
-
-	err := row.Scan(valuePtrs...)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Item not found", http.StatusNotFound)
+func handleGet(w http.ResponseWriter, r *http.Request, masterKey string, config MasterConfig, id string) {
+	if id != "" {
+		// GET single
+		var columns = strings.Join(config.Fields, ", ")
+		row := db.QueryRow(fmt.Sprintf("SELECT %s FROM %s WHERE id=$1 AND deleted_at IS NULL", columns, config.TableName), id)
+		data := make(map[string]interface{})
+		dest := make([]interface{}, len(config.Fields))
+		for i := range config.Fields {
+			var tmp interface{}
+			dest[i] = &tmp
+		}
+		if err := row.Scan(dest...); err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "Not found", 404)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		for i, f := range config.Fields {
+			data[f] = *(dest[i].(*interface{}))
+		}
+		jsonResponse(w, data)
 		return
 	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	item := make(map[string]interface{})
-	for i, f := range config.Fields {
-		item[f] = values[i]
-	}
-
-	json.NewEncoder(w).Encode(item)
-}
-
-func getList(w http.ResponseWriter, r *http.Request, config MasterConfig) {
+	// GET list
 	page, limit, offset := getPagination(r)
 	search := r.URL.Query().Get("q")
-	searchQuery := "%" + search + "%"
 
-	// Count total
-	var total int
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE deleted_at IS NULL AND (kode ILIKE $1 OR nama ILIKE $1)", config.TableName)
-	db.QueryRow(countQuery, searchQuery).Scan(&total)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE deleted_at IS NULL", strings.Join(config.Fields, ", "), config.TableName)
+	args := []interface{}{}
 
-	totalPage := int(math.Ceil(float64(total) / float64(limit)))
+	if search != "" {
+		searchCond := []string{}
+		for _, f := range config.Fields {
+			if f == "id" || f == "created_at" || f == "updated_at" || f == "deleted_at" {
+				continue
+			}
+			searchCond = append(searchCond, fmt.Sprintf("%s ILIKE $%d", f, len(args)+1))
+			args = append(args, "%"+search+"%")
+		}
+		if len(searchCond) > 0 {
+			query += " AND (" + strings.Join(searchCond, " OR ") + ")"
+		}
+	}
 
-	// Get rows
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE deleted_at IS NULL AND (kode ILIKE $1 OR nama ILIKE $1) ORDER BY id LIMIT $2 OFFSET $3", strings.Join(config.Fields, ","), config.TableName)
-	rows, err := db.Query(query, searchQuery, limit, offset)
+	query += fmt.Sprintf(" ORDER BY id DESC LIMIT %d OFFSET %d", limit, offset)
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 500)
 		return
 	}
 	defer rows.Close()
 
 	var results []map[string]interface{}
 	for rows.Next() {
-		values := make([]interface{}, len(config.Fields))
-		valuePtrs := make([]interface{}, len(config.Fields))
+		dest := make([]interface{}, len(config.Fields))
 		for i := range config.Fields {
-			valuePtrs[i] = &values[i]
+			var tmp interface{}
+			dest[i] = &tmp
 		}
-		rows.Scan(valuePtrs...)
-		item := make(map[string]interface{})
+		if err := rows.Scan(dest...); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		rowMap := make(map[string]interface{})
 		for i, f := range config.Fields {
-			item[f] = values[i]
+			rowMap[f] = *(dest[i].(*interface{}))
 		}
-		results = append(results, item)
+		results = append(results, rowMap)
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	var total int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE deleted_at IS NULL", config.TableName)
+	_ = db.QueryRow(countQuery).Scan(&total)
+
+	resp := map[string]interface{}{
 		"page":       page,
 		"limit":      limit,
 		"total_data": total,
-		"total_page": totalPage,
+		"total_page": (total + limit - 1) / limit,
 		"data":       results,
-	})
+	}
+	jsonResponse(w, resp)
 }
 
-func createItem(w http.ResponseWriter, r *http.Request, config MasterConfig) {
-	// Decode JSON ke map[string]interface{}
+func handleCreate(w http.ResponseWriter, r *http.Request, masterKey string, config MasterConfig) {
 	var data map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		http.Error(w, err.Error(), 400)
 		return
 	}
 
-	// Build query dynamically
+	// BeforeCreate hook
+	if hook, ok := masterHooks[masterKey]; ok && hook.BeforeCreate != nil {
+		if err := hook.BeforeCreate(data); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+
 	fields := []string{}
 	values := []interface{}{}
 	placeholders := []string{}
@@ -248,35 +280,34 @@ func createItem(w http.ResponseWriter, r *http.Request, config MasterConfig) {
 		}
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s", config.TableName, strings.Join(fields, ","), strings.Join(placeholders, ","), strings.Join(config.Fields, ","))
-	row := db.QueryRow(query, values...)
+	fields = append(fields, "created_at", "updated_at")
+	values = append(values, time.Now(), time.Now())
+	placeholders = append(placeholders, fmt.Sprintf("$%d", i), fmt.Sprintf("$%d", i+1))
 
-	result := make([]interface{}, len(config.Fields))
-	ptrs := make([]interface{}, len(config.Fields))
-	for i := range config.Fields {
-		ptrs[i] = &result[i]
-	}
-	if err := row.Scan(ptrs...); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING id", config.TableName, strings.Join(fields, ", "), strings.Join(placeholders, ", "))
+	var lastID int64
+	err := db.QueryRow(query, values...).Scan(&lastID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	item := make(map[string]interface{})
-	for i, f := range config.Fields {
-		item[f] = result[i]
-	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Created successfully",
-		"data":    item,
-	})
+	jsonResponse(w, map[string]interface{}{"message": "Created successfully", "id": lastID})
 }
 
-func updateItem(w http.ResponseWriter, r *http.Request, config MasterConfig, id int) {
+func handleUpdate(w http.ResponseWriter, r *http.Request, masterKey string, config MasterConfig, id string) {
 	var data map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		http.Error(w, err.Error(), 400)
 		return
+	}
+
+	// BeforeUpdate hook
+	if hook, ok := masterHooks[masterKey]; ok && hook.BeforeUpdate != nil {
+		if err := hook.BeforeUpdate(data); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 	}
 
 	fields := []string{}
@@ -292,53 +323,52 @@ func updateItem(w http.ResponseWriter, r *http.Request, config MasterConfig, id 
 			i++
 		}
 	}
+
+	if len(fields) == 0 {
+		http.Error(w, "No fields to update", 400)
+		return
+	}
+
+	fields = append(fields, fmt.Sprintf("updated_at=$%d", i))
+	values = append(values, time.Now())
+	i++
 	values = append(values, id)
-	query := fmt.Sprintf("UPDATE %s SET %s, updated_at=NOW() WHERE id=$%d AND deleted_at IS NULL", config.TableName, strings.Join(fields, ","), i)
-	result, err := db.Exec(query, values...)
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE id=$%d", config.TableName, strings.Join(fields, ", "), i)
+	_, err := db.Exec(query, values...)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 500)
 		return
 	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
-		http.Error(w, "Item not found", http.StatusNotFound)
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Updated successfully",
-	})
+
+	jsonResponse(w, map[string]interface{}{"message": "Updated successfully"})
 }
 
-func deleteItem(w http.ResponseWriter, config MasterConfig, id int) {
-	query := fmt.Sprintf("UPDATE %s SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL", config.TableName)
-	result, err := db.Exec(query, id)
+func handleDelete(w http.ResponseWriter, r *http.Request, masterKey string, config MasterConfig, id string) {
+	// BeforeDelete hook
+	if hook, ok := masterHooks[masterKey]; ok && hook.BeforeDelete != nil {
+		if err := hook.BeforeDelete(id); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+
+	query := fmt.Sprintf("UPDATE %s SET deleted_at=$1 WHERE id=$2", config.TableName)
+	_, err := db.Exec(query, time.Now(), id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), 500)
 		return
 	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
-		http.Error(w, "Item not found", http.StatusNotFound)
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]string{"message": "Deleted successfully"})
+
+	jsonResponse(w, map[string]interface{}{"message": "Deleted successfully"})
 }
 
-func restoreItem(w http.ResponseWriter, config MasterConfig, id int) {
-	query := fmt.Sprintf("UPDATE %s SET deleted_at=NULL WHERE id=$1", config.TableName)
-	result, err := db.Exec(query, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
-		http.Error(w, "Item not found", http.StatusNotFound)
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]string{"message": "Restored successfully"})
-}
+// ---------------- HELPERS ----------------
 
-/* =========================
-   HELPERS
-========================= */
+func jsonResponse(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
+}
 
 func getPagination(r *http.Request) (page, limit, offset int) {
 	page, limit = 1, 10
